@@ -1,0 +1,4 @@
+load("/Users/huangat/Documents/Projects/dengueAgeYear_Thailand/public_repo/04-dataForStan/config.RDS")
+load("/Users/huangat/Documents/Projects/dengueAgeYear_Thailand/public_repo/04-dataForStan/config.RDS") -> x
+x = readRDS('config.RDS')
+x
