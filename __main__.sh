@@ -9,6 +9,7 @@ Rscript --vanilla Scripts/04-describeData.R
     # define directories
     datadir="04-dataForStan"
     fitdir="05-estimates"
+    fitver=""
     casever="DHF_add"
     
     # get the list of provinces
@@ -22,7 +23,9 @@ Rscript --vanilla Scripts/04-describeData.R
         for qeMode in "" "QeT" ; do
             model=${model}${qeMode}
             if [[ ! -f "${fitdir}/${model}/${prov}.RDS" ]]; then
-                Rscript --vanilla Scripts/04-fitStan.R ${model} ${prov} -casever ${casever}
+                Rscript --vanilla Scripts/04-fitStan${fitver}.R ${model} ${prov} -casever ${casever} \
+                    -stanbase ${fitdir}${fitver}\
+                    -stanfile Scripts/stan/piecewise${fitver}.stan
             fi
         done
         done
@@ -33,12 +36,40 @@ Rscript --vanilla Scripts/04-describeData.R
 
 
 # Check convergence of model fits and do model comparison
-Rscript --vanilla Scripts/05-checkStanFit.R "DHF_add" -od "06-assessFits"
+checkFit(){
+    Rscript --vanilla Scripts/05-checkStanFit.R "DHF_add" \
+        -stanroot "${fitdir}${fitver}"
+        -od "06-assessFits${fitver}"    
+}
+checkFit
+
+# Plot priors vs posteriors for the best fit model
+Rscript --vanilla Scripts/05-PriorVsPosterior.R
+
+# Assess sensitivity of parameter estimates
+
+    # Fit best model using weaker priors on Q(i,t)
+    fitver="_widePrior"
+    # use same R file as before, but a different stan file which has wider priors
+    cp Scripts/04-fitStan.R Scripts/04-fitStan${fitver}.R
+    for iprov in $(seq 1 72 ) ; do
+        runStan_province ${iprov}
+    done
+    checkFit
+    
+    # Refit all models with less degrees of freedom for tau(t)
+    fitver="_16tau"
+    for iprov in $(seq 1 72 ) ; do
+        runStan_province ${iprov}
+    done
+    checkFit
+
+    # Do the sensitivity assessment
+    Rscript --vanilla Scripts/07-sensitivityAnalysis.R
 
 
 # Perform inferences, and plot figures
 Rscript --vanilla 06-inferenceFromFits.R
 
-
-# Simulate theoretical population (Figure S8)
+# Simulate theoretical population (Figure S15)
 Rscript --vanilla Scripts/10-betaDemogTransitionEffects.R

@@ -120,8 +120,8 @@ LooList = lapply(x, function(xProv){
             vars = grep('^log_lik|^lp__|^rmse', rownames(fitsum.raw), value=T, invert=T)
         
             getFitSummary = function(fitsum, vars, ess.thres=300){
-                fitsum = fitsum[vars, c('mean','2.5%','97.5%','n_eff','Rhat')]
-                colnames(fitsum)[2:4] = c('lower','upper','ESS')
+                fitsum = fitsum[vars, c('mean','2.5%','50%','97.5%','n_eff','Rhat')]
+                colnames(fitsum)[2:5] = c('lower','mid','upper','ESS')
 
                 fitsum %>%
                     as.data.frame %>%

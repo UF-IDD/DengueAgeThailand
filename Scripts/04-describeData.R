@@ -9,7 +9,68 @@ config = readRDS( paste0(datadir,"/config.RDS") )
 plotdir = '04-describeData'
 dir.create(plotdir, recursive = T)
 
-    #   Read in data
+
+    #   Describe predicted vs observed population data
+    #   (Fig. S1)
+    #   ..............
+
+# showing example of Krabi
+pop = '02-processedPop/population.csv' %>%
+    read_csv(show_col_types = F) %>%
+    filter(province72 == "Krabi") %>%
+    filter(between(year, 1981, 2017))
+
+g = ggarrange(
+    pop %>%
+        select(year, age, count72, calibratedCount) %>%
+        gather(Source, Count, -year, -age) %>%
+        arrange(year, age) %>%
+        mutate(Source = c(
+            'calibratedCount' = 'Predicted'
+            , 'count72' = 'Observed'
+        )[Source]) %>%
+        ggplot(aes(x = age, y = Count, group = year, color = year))+
+        geom_line()+
+        facet_grid(Source ~ .)+
+        scale_color_gradient2(
+            low = 'black'
+            , mid = 'blue'
+            , high = '#fcba03'
+            , midpoint = 2000
+        )+
+        guides(color = "none")+
+        xlab('Age (years)')+
+        ylab('Population size')
+
+    , pop %>%
+        ggplot(aes(x = count72, y = calibratedCount, color = year))+
+        geom_abline(slope = 1, linetype = 3, color = 'red')+
+        geom_point(shape = 1, stroke = 0.2)+
+        scale_color_gradient2(
+            low = 'black'
+            , mid = 'blue'
+            , high = '#fcba03'
+            , midpoint = 2000
+        )+
+        coord_fixed(ratio = 1)+
+        xlab('Observed')+
+        ylab('Predicted')
+
+    , ncol = 1
+    , nrow = 2
+    , heights = c(4,1.8)
+    , labels = 'auto'
+)
+ggsave(g
+    ,filename = paste0(plotdir,"/Krabi.pdf")
+    ,width = 6
+    ,height = 8
+)
+
+
+
+
+    #   Read in data used for model fitting
     #   ............
     
 fun = new.env()

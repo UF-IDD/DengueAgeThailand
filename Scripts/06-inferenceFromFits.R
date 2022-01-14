@@ -47,6 +47,16 @@ dat$case = lapply( places, function(place){
     dat$readDataCsv(paste0(dat$datadir,"/",dataver,"/",place,".csv"))
 })
 config = readRDS( paste0(dat$datadir,"/config.RDS") )
+config$ageGroupLabels = apply(config$ageGroups, 1, function(x){
+    x = range(config$ages[x==1])
+    if(x[1]==x[2]){
+        return(x[1])
+    } else if(x[2]==99){
+        return(paste0(x[1],'+'))
+    } else {
+        paste0(x[1],'-',x[2])
+    }
+})
 
 
 
@@ -119,6 +129,7 @@ do.call(what=rbind)
 
 # double check that all did converge
 summary(x)
+x %>% filter(ESS < 300, Rhat > 1.01) # filter for non-converging entries, if exists
 
 x = x %>%
     select(province, model, var, mean, lower, upper) %>%
@@ -147,6 +158,11 @@ getCountryBestModel = function(x, value_col = val, smaller_better = 1, maxRank =
         group_by(province) %>%
         mutate(ranking = rank(smaller_better * val, ties.method = "min")) %>%
         filter(ranking <= maxRank) %>%
+
+        # fractional votes if there are ties
+        group_by(province, ranking) %>%
+        mutate(vote = 1/n()) %>%       
+        
         group_by(model, ranking) %>%
         summarize( count = n() ) %>%
         group_by(ranking) %>%
@@ -157,8 +173,6 @@ getCountryBestModel = function(x, value_col = val, smaller_better = 1, maxRank =
         head(maxRank) %>%
         unlist
 }
-  
-        
 
 # import: ELPD
 elpd = lapply(
@@ -450,19 +464,21 @@ g = x %>%
     ggplot(aes(x = model, y = val, color = model == modelSelected))+
     geom_point()+
     geom_linerange(aes(ymin = lower, ymax = upper))+
-    facet_wrap( ~ province )+
+    facet_wrap( ~ province, ncol = 8 )+
     scale_color_manual(values = c('TRUE' = 'blue', 'FALSE' = 'black'), guide = "none")+
     scale_x_discrete("Candidate model"
         , labels = modelLetter
     )+
     ylab("Difference in -ELPD from\ncountry-level best model")+
-    theme(panel.grid = element_blank())
+    theme(
+        panel.grid = element_blank()
+        , strip.text = element_text(size = rel(0.5))
+    )
 ggsave( g
     ,filename = paste0(plotdir,"/performance_bestModels.pdf")
-    ,width = 10
-    ,height = 10
+    ,width = 9
+    ,height = 12
 )
-
   
 
 # In how many provinces did the most complex models win?
@@ -579,6 +595,11 @@ fun$expandBinned = function(binMax, binwidth, iMax, leftHang = 0){
 fun$extractParam = function(x, parname, varname=NULL, ...){
     x = x %>%
         filter(var == parname) %>%
+        # --------------------- IMPORTANT ----------------------
+        # Use medians instead of means because variables may or may not
+        # be normally distributed. Just to be on the safe side.
+        mutate(mean = mid) %>%
+        # ------------------------------------------------------
         select(var, ivar, mean, lower, upper)
 
     ctrl = list(...)
@@ -601,7 +622,8 @@ paramCols = c(
     , 'PhiT' = '#c4600e'
 )
 # function to plot the series of piecewise constant parameters
-fun$plotParamSeries = function(x, ylabel, xlabel, legendPosition=c(2,2), xLimit
+fun$plotParamSeries = function(x, ylabel
+    , legendPosition=c(2,2)
     , Color.qi = '#8f8f8f'
     , Color.qit = paramCols[['Qe']]
 ){
@@ -609,8 +631,7 @@ fun$plotParamSeries = function(x, ylabel, xlabel, legendPosition=c(2,2), xLimit
     el = elpd %>% 
         select( -intersect(colnames(x[[1]]), colnames(elpd)) ) %>%
         mutate(model = factor(model, levels=fun$models)) %>%
-        unnest(cols=x) %>%
-        mutate(xvar = as.integer(xvar))
+        unnest(cols=x)
 
     el %>%
         ggplot(aes( x = xvar))+
@@ -625,8 +646,7 @@ fun$plotParamSeries = function(x, ylabel, xlabel, legendPosition=c(2,2), xLimit
             geom_errorbar(data = el %>%
                 group_by(model, xvar, ivar) %>%
                 summarize(
-                    meanVal = mean(mean)
-                    ,lower = quantile(mean, .025)
+                     lower = quantile(mean, .025)
                     ,upper = quantile(mean, .975)
                 )
                 ,aes(
@@ -636,13 +656,12 @@ fun$plotParamSeries = function(x, ylabel, xlabel, legendPosition=c(2,2), xLimit
                 ) )+   
             geom_point(data = el %>%
                 group_by(model, xvar, ivar) %>%
-                summarize( meanVal = mean(mean) )
+                summarize( midVal = median(mean) )
                 ,aes(
-                    y = meanVal
+                    y = midVal
                     , col = model 
-                ), shape=16, size=3 )+
+                ), shape=16, size=2 )+
         ylab(ylabel)+
-        scale_x_continuous(xlabel, limits=xLimit)+
         scale_color_manual(
             "Model components"
             ,values = c(Color.qi, Color.qit)
@@ -660,7 +679,7 @@ fun$plotParamSeries = function(x, ylabel, xlabel, legendPosition=c(2,2), xLimit
             ,strip.text = element_text(margin = margin(0,0,0,0, "lines"))
             ,legend.position = legendPosition
             ,plot.margin = margin(2,.5,0,0, "lines")
-            ,axis.title.y = element_text(color = Color.qit, face = 'bold', size = 20)
+            ,axis.title.y = element_text(color = Color.qit, size = rel(1.2))
             ,axis.text.y = element_text(color = Color.qit)
         )
 }
@@ -681,23 +700,23 @@ gTime = ggarrange(
                 ,upper = upper * lambda.scaler
             )
         })
-        , expression(bar(tau)(t))
-        , "Year"
+        #, expression(bar(tau)(t))
+        , "Time-varying per-serotype\ninfection intensity"
         , legendPosition=c(.8,.8)
-        , xLimit=c(1980,2017) + c(-.5,.5)
         , Color.qit = paramCols[['Lambda']]
-    )
+    )+
+    scale_x_continuous("Year", limits = c(1980,2017) + c(-.5,.5))
 
     # PhiT
     ,fun$plotParamSeries(
         elpd$expandedPhiT <- lapply(elpd$est, function(est){
             fun$extractParam(est, "binnedPhiT", varname="PhiT", binMax=16, binwidth=2, iMax=37) %>% mutate(xvar = 1980 + ivar)
         })
-        , expression(phi(t))
-        , "Year"
-        , xLimit=c(1980,2017) + c(-.5,.5)
+        #, expression(phi(t))
+        , "Time-varying\nreporting rate"
         , Color.qit = paramCols[['PhiT']]
-    )
+    )+
+    scale_x_continuous("Year", limits = c(1980,2017) + c(-.5,.5))
 
     ,ncol = 1
     ,nrow = 2
@@ -720,29 +739,31 @@ gAge = ggarrange(
                 ,upper = upper / lambda.scaler
             )
         })
-        , expression(kappa(a))
-        , "Age"
-        , xLimit=c(0,65) + c(-.5,.5)
+        # , expression(kappa(a))
+        , "Age-specific modifier for\ninfection intensity"
         , Color.qit = paramCols[['K']]
     )+
-    coord_cartesian(ylim=c(0, 8))
+    coord_cartesian(ylim=c(0, 8))+
+    scale_x_continuous("Age", limits = c(0,65) + c(-.5,.5))
 
     # PhiA
     ,fun$plotParamSeries(
         elpd$expandedPhiA <- lapply(elpd$est, function(est){
             fun$extractParam(est, "binnedPhiA", varname="PhiA", binMax=16, binwidth=4, iMax=65) %>% mutate(xvar = ivar - 1)
         })
-        , expression(phi(a))
-        , "Age"
-        , xLimit=c(0,65) + c(-.5,.5)
+        # , expression(phi(a))
+        , "Age-specific\nreporting rate"
         , Color.qit = paramCols[['PhiA']]
-    )
+    )+
+    scale_x_continuous("Age", limits = c(0,65) + c(-.5,.5))
 
     ,ncol = 1
     ,nrow = 2
     ,heights = c(1.4,2)
     ,align = "v"
 )
+
+
 
 
 # Qe
@@ -759,7 +780,7 @@ qeDat = elpd %>%
     unnest(cols= Qe) %>%
     group_by(model,var,ivar) %>%
     summarize(
-        meanVal = mean(mean)
+        midVal = median(mean)
         ,upper = quantile(mean, .975)
         ,lower = quantile(mean, .025)
     ) %>%
@@ -791,11 +812,11 @@ fun$plotQe = function(
             )
 ){
     qeDatI %>%
-        ggplot(aes( x = ivar, y = meanVal, fill = paste(model,var,epoch) , col = paste(model,var,epoch)  ))+
+        ggplot(aes( x = ivar, y = midVal, fill = paste(model,var,epoch) , col = paste(model,var,epoch)  ))+
         geom_bar(stat="identity", position = "dodge", size=0.2, width=.8
             , color = '#444444'
         )+
-        geom_errorbar(aes(ymin = lower, ymax = upper), position = position_dodge(width=.8), col="black", width=.1, size=2)+
+        geom_errorbar(aes(ymin = lower, ymax = upper), position = position_dodge(width=.8), col="black", width=.4, size=0.4)+
         scale_fill_manual(
             values = fill.colors
             ,labels = fill.labs
@@ -808,9 +829,6 @@ fun$plotQe = function(
         )+
         coord_cartesian(ylim = ylimit)
 }
-
-
-
 gQe = ggarrange(
     fun$plotQe(qeDat, ylimit = c(.91,1), xlabel="", ylabel = "") + 
         theme(
@@ -824,13 +842,13 @@ gQe = ggarrange(
         ) +
         annotate("text"
             , x = 4.4, y = .975
-            , label = "Clinical detectability (Q)"
+            , label = "Clinical detectability"
             , hjust=1, vjust=1
             , color = "#7300ff"
             , size = 8
         )
 
-    ,fun$plotQe(qeDat, ylimit = c(0,.3), ylabel = "") + 
+    ,fun$plotQe(qeDat, ylimit = c(0,.31), ylabel = "") + 
         theme(
             legend.title = element_blank()
             ,panel.grid.major.x = element_blank()
@@ -937,7 +955,7 @@ do.call(what = rbind)
 elpd$expandedPhiA %>%
     do.call(what = rbind) %>%
     filter(ivar == 13) %>%
-    with(quantile(mean, c(.025, .5, .9750))) %>%
+    with(quantile(mean, c(.025, .5, .975))) %>%
     round(2)
 # Phi(a=50) compared to Phi(a=20)
 elpd %>%
@@ -947,7 +965,7 @@ elpd %>%
     select(province, xvar, mean) %>%
     spread(xvar, mean) %>%
     mutate(mult = `50`/`20`) %>%
-    with(c(mean(mult), quantile(mult, c(.025, .5, .9750)))) %>%
+    with(c(mean(mult), quantile(mult, c(.025, .5, .975)))) %>%
     round(2)
 
 # K(a=12) compared to K(a=11)
@@ -958,7 +976,7 @@ elpd %>%
     select(province, xvar, mean) %>%
     spread(xvar, mean) %>%
     mutate(mult = `12`/`11`) %>%
-    with(c(mean(mult), quantile(mult, c(.025, .5, .9750)))) %>%
+    with(c(median(mult), quantile(mult, c(.025, .5, .975)))) %>%
     round(2)
 # K in older adults
 elpd %>%
@@ -981,15 +999,16 @@ dCase = dat$case %>%
     mutate(Year = gsub("[^0-9]","",Year) %>% as.integer) %>%
     mutate(province = factor(province, levels = names(dat$case)))
 gCase = dCase %>%
-    ggplot(aes(x = Year, y = count))+
-    geom_line(aes(group=province), alpha = 0.3)+
+    ggplot(aes(x = Year, y = count * 10 / 1000))+
+    #geom_line(aes(group=province), color = '#bbbbbb', alpha = 0.4, size = 0.4)+
     geom_line(data = dCase %>% 
             group_by(Year) %>%
             summarize(count = sum(count))
-        , size = 2
+        , aes(y = count / 1000)
+        , size = 0.8
     )+
     scale_x_continuous(limits = c(1980,2017) + c(-.5,.5))+
-    scale_y_continuous("Cases\nreported", trans="log10")+
+    scale_y_continuous("1000 DHF cases\nreported")+
     theme(
         panel.grid = element_blank()
         , axis.text.x = element_blank()
@@ -1011,16 +1030,19 @@ gQe = qeDat %>%
                 , '#874bd1'
                 , paramCols[['Qe']]
             )
-        , ylabel = expression('Q(i,t)')
+        # , ylabel = expression('Q(i,t)')
+        , ylabel = "Clinical\ndetectability"
     )+
     guides(fill=guide_legend(keyheight=unit(0.4,"lines")))+
     theme(
         legend.title = element_blank()
+        ,legend.position = c(1,1)
+        ,legend.justification = c(1,1)
         ,panel.grid.major.x = element_blank()
         ,panel.grid.minor.x = element_blank()
         ,panel.border = element_blank()
-        ,plot.margin = margin(0,.5,0,0, "lines")
-        ,axis.title.y = element_text(color = paramCols[['Qe']], face = 'bold', size = 20)
+        # ,plot.margin = margin(0,.5,0,0, "lines")
+        ,axis.title.y = element_text(color = paramCols[['Qe']], size = rel(1.2))
         ,axis.text.y = element_text(color = paramCols[['Qe']])
     )
 
@@ -1031,83 +1053,100 @@ gTime = ggarrange(
     # tau(t)
     , fun$plotParamSeries( 
         elpd$expandedLambda
-        , expression(bar(tau)(t))
-        , "Year"
-#         , legendPosition=c(.8,.8)
-        , xLimit=c(1980,2017) + c(-.5,.5)
+        # , expression(bar(tau)(t))
+        , "Time-varying per-serotype\ninfection intensity"
         , Color.qit = paramCols[['Lambda']]
         , Color.qi = character(0)
-    )
+    )+
+    scale_x_continuous("Year", limits = c(1980,2017) + c(-.5,.5))+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 
     # PhiT
     ,fun$plotParamSeries(
         elpd$expandedPhiT
-        , expression(phi(t))
-        , "Year"
-        , xLimit=c(1980,2017) + c(-.5,.5)
+        # , expression(phi(t))
+        , "Time-varying\nreporting rate"
         , Color.qit = paramCols[['PhiT']]
         , Color.qi = character(0)
-    )
+    )+
+    scale_x_continuous("Year", limits = c(1980,2017) + c(-.5,.5))+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 
     ,ncol = 1
     ,nrow = 3
-    ,heights = c(1, 2,2)
+    ,heights = c(1.2, 2, 2)
     ,align = "v"
-    ,labels = c('d','','')
+    ,labels = 'auto'
 )
 
 
 # age varying parameters: K, PhiA
+# (plot as age bins)
+ageBinLabel = data.frame(ageBin = fun$expandBinned(binMax = 16, binwidth = 4, iMax = 65)) %>%
+    mutate(age = seq_along(ageBin) - 1) %>%
+    group_by(ageBin) %>%
+    nest %>%
+    mutate(ageBinLabel = sapply(data, function(x){
+        x = range(x$age)
+        if(x[1]>=60){ return('60+')}
+        paste0(x[1],'-',x[2])
+    })) %>%
+    with(ageBinLabel)
 gAge = ggarrange(
+    gQe
     # K
-    fun$plotParamSeries(
-        elpd$expandedK
-        , expression(kappa(a))
-        , "Age"
-        , xLimit=c(0,65) + c(-.5,.5)
+    ,fun$plotParamSeries(
+        lapply(elpd$est, function(est){
+            fun$extractParam(est, "binnedK") %>%
+            mutate(xvar = factor(ageBinLabel[ivar], levels = ageBinLabel)) %>%
+            # scaling
+            mutate(
+                mean = mean / lambda.scaler
+                ,lower = lower / lambda.scaler
+                ,upper = upper / lambda.scaler
+            )
+        })
+        # , expression(kappa(a))
+        , "Age-specific modifier for\ninfection intensity"
         , Color.qit = paramCols[['K']]
         , Color.qi = character(0)
     )+
-    coord_cartesian(ylim=c(0, 8)) +
-    # inset: Qe
-    annotation_custom( ggplotGrob(gQe)
-        , xmin = 0, xmax = 60
-        , ymin = 5, ymax = 8
-    )
+    coord_cartesian(ylim=c(0, 8))+
+    xlab('Age')+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 
     # PhiA
     ,fun$plotParamSeries(
-        elpd$expandedPhiA
-        , expression(phi(a))
-        , "Age"
-        , xLimit=c(0,65) + c(-.5,.5)
+        lapply(elpd$est, function(est){
+            fun$extractParam(est, "binnedPhiA") %>% 
+            mutate(xvar = factor(ageBinLabel[ivar], levels = ageBinLabel))
+        })
+        #, expression(phi(a))
+        , "Age-specific\nreporting rate"
         , Color.qit = paramCols[['PhiA']]
         , Color.qi = character(0)
-    )
+    )+
+    xlab('Age')+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 
     ,ncol = 1
-    ,nrow = 2
-    ,heights = c(2,2)
+    ,nrow = 3
+    ,heights = c(1.2,2,2)
     ,align = "v"
+    ,labels = letters[4:6]
 )
 
 g = ggarrange(
-    ggarrange(
-        ggplot() + theme_void()
-        , gAge
-        , ncol = 1
-        , nrow = 2
-        , heights = c(1,4)
-        , labels = c('', 'c')
-    )
-    , gTime
+      gTime
+    , gAge
     , ncol = 2
     , nrow = 1
+    , widths = c(2, 1.5)
 )
 
 ggsave( g
     ,filename = paste0(plotdir,"/piecewise_colored_best.pdf")
-    ,width = 10
+    ,width = 7
     ,height = 8
 )
 
@@ -1117,6 +1156,13 @@ ggsave( g
     #   Correlation in the estimates across provinces
     #   (Figure S6)
     #   .............................................
+
+parnames = c(
+    "expandedLambda" = expression( bar(tau)(t) )
+    , "expandedK" = expression( kappa(a) )
+    , "expandedPhiT" = expression( phi(t) )
+    , "expandedPhiA" = expression( phi(a) )
+)
 
 plotCor = function(elpd){
 
@@ -1135,12 +1181,6 @@ plotCor = function(elpd){
         data.frame(cor = corr[upper.tri(corr, diag=F)])
     }
 
-    parnames = c(
-        "expandedLambda" = expression( bar(tau)(t) )
-        , "expandedK" = expression( kappa(a) )
-        , "expandedPhiT" = expression( phi(t) )
-        , "expandedPhiA" = expression( phi(a) )
-    )
     parCor = lapply(names(parnames), getCorr)
     gCor = mapply(function(corr, parname){
             g = ggplot(corr, aes(x = cor))+
@@ -1170,16 +1210,74 @@ plotCor = function(elpd){
     )
 }
 
-ggsave( plotCor(elpd)
-    ,filename = paste0(plotdir,'/est-correlation.pdf')
-    ,width = 4
-    ,height = 6
+library(geosphere)
+plotCorDist = function(
+        parname
+        , posVar=c('cenX','cenY')
+        , xlabel="Euclidean distance (km)"
+        , distfun=distm
+        , distRescalefun=function(x){x}
+){
+    # compute pair-wise distances
+    d = sp$provinceCentroids %>%
+        mutate(province72 = factor(province72, levels=places)) %>%
+        group_by(province72) %>%
+        summarize(
+            cenX = sum(cenX*area)/sum(area)
+            ,cenY = sum(cenY*area)/sum(area)
+        )
+    rownames(d) = d$province72
+    
+    distance = distfun(d[ , posVar]) / 1000 # calculate distance and convert to km
+    distance = as.matrix(distance)
+
+    # compute pair-wise correlation coefficients
+    d = elpd[ ,c("province",parname)] %>%
+        unnest(parname) %>%
+        select(province,ivar,mean) %>%
+        spread(province, mean) %>%
+        ungroup %>%
+        select(-ivar)
+
+    d = data.frame(
+        cor = cor(d)[upper.tri(distance, diag=F)]
+        ,distance = distance[upper.tri(distance, diag=F)]
+    ) %>%
+    mutate( distance = distRescalefun(distance) )
+
+    g = ggplot(d, aes(
+            x = distance
+            ,y = cor
+        ))+
+        geom_point(alpha=.3, shape=1)+
+        geom_smooth(method="gam")+
+        labs(
+            x = xlabel
+            ,y = "Corr. coef."
+        )+
+        ggtitle(parnames[[parname]])
+    return(g)
+}
+
+g = ggarrange(
+    plotCor(elpd)
+    , ggarrange(
+        plotCorDist("expandedLambda")
+        ,plotCorDist("expandedK")
+        ,plotCorDist("expandedPhiT")
+        ,plotCorDist("expandedPhiA")
+        ,ncol = 1
+        ,nrow = 4
+    )
+    , ncol = 2
+    , nrow = 1
+    , labels = 'auto'
 )
-
-
-
-
-
+ggsave( g
+    ,filename = paste0(plotdir,'/est-correlation.pdf')
+    ,width = 6
+    ,height = 8
+)
 
 
 
@@ -1324,6 +1422,13 @@ fun$getCaseMeanAge = function(lambdas, K, phiTA=1, Qit, pop){
 # appropriately repeat expanded estimates to match full length
 # of those parameters
 fun$extendExpandedToFullLength = function(exLambda, exK, exPhiA, exQ){
+    if((length(exQ) %% 4) != 0){
+        stop('Q not in multiples of 4.')
+    } else {
+        exQ = split(exQ, seq_along(exQ) %% 4)[c('1','2','3','0')] %>%
+            lapply(function(x){ x[fun$expandBinned(length(exQ)/4, 9, iMax = length(config$times))] })
+    }
+
     list(
         exLambda = c(
             rep(exLambda[1], length(config$cohorts) - length(config$times))
@@ -1337,7 +1442,7 @@ fun$extendExpandedToFullLength = function(exLambda, exK, exPhiA, exQ){
             exPhiA
             ,rep(exPhiA[length(exPhiA)], length(config$ages) - length(exPhiA))
         )
-        , exQ = lapply(exQ, rep, times=length(config$times))
+        , exQ = exQ
     )
 }
 
@@ -1355,8 +1460,8 @@ fun$getCaseMeanAgeFromExpanded = function(exLambda, exK, exPhiA, exPhiT, exQ, po
     ))
 }
 
-# get mean age from expanded estimates
-# (i.e. wrapper function around fun$getCaseMeanAge)
+# get age from expanded estimates
+# (i.e. wrapper function around fun$getCaseAge)
 # : assuming "m3h.rta" model
 fun$getCaseAgeFromExpanded = function(exLambda, exK, exPhiA, exPhiT, exQ, pop){
     fullLength = fun$extendExpandedToFullLength(exLambda, exK, exPhiA, exQ)
@@ -1454,6 +1559,126 @@ recon = mapply( fun$getReconstruction
     ,SIMPLIFY = FALSE
 )
 
+
+# take a look at how well the reconstructions fit the observed data
+Error = with(elpd, {
+    mapply(
+        fun$getCaseAgeFromExpanded
+        , exLambda = lapply(expandedLambda, function(x) x$mean )
+        , exK = lapply(expandedK, function(x) x$mean )
+        , exPhiA = lapply(expandedPhiA, function(x) x$mean )
+        , exPhiT = lapply(expandedPhiT, function(x) x$mean )
+        , exQ = lapply(Qe, function(x) x$mean )
+        , pop = dat$pop[province]
+        , SIMPLIFY = FALSE
+    ) %>% 
+    mapply(FUN = function(x, prov){
+            case = dat$case[[prov]]
+            # for each i-th infection, calculate counts by age group
+            predicted = lapply(x, function(xi){
+                    as.matrix(config$ageGroups) %*% t(xi)
+                }) %>%
+                # sum counts from all i's
+                abind(along=3) %>%
+                apply(c(1,2), sum)
+
+            tibble(
+                ageGroup = rep(1:nrow(config$ageGroups), times = ncol(case))[case != config$naVal]
+                , year = rep(config$times, each = nrow(config$ageGroups))[case != config$naVal]
+                , predicted = predicted[case != config$naVal]
+                , observed = case[case != config$naVal]
+            ) %>%
+            group_by(year) %>%
+            mutate(error = sum(abs(predicted - observed))) %>%
+            ungroup %>%
+            mutate(province = prov)
+            
+        }
+        , prov = province
+        , SIMPLIFY = FALSE
+    )
+})
+
+plotGof = function(worst = T, dat = Error){
+    g = lapply(dat, function(x, errorMin = !worst){
+        x %>%
+            arrange(error * ifelse(errorMin, 1, -1)) %>%
+            filter(error == error[1])
+    }) %>%
+    do.call(what = rbind) %>%
+    mutate(`Age Group` = factor(ageGroup
+        , levels = seq_along(config$ageGroupLabels)
+        , labels = config$ageGroupLabels
+    )) %>%
+    ggplot(aes(x = `Age Group`))+
+    geom_col(aes(y = observed), fill = '#cccccc')+
+    geom_point(aes(y = predicted), size = 0.5, shape = 1)+
+    facet_wrap( ~ province, ncol = 8)+
+    ylab('Number of DHF cases')+
+    theme_classic()+
+    theme(
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = rel(0.7))
+        , strip.text = element_text(size = rel(0.7))
+    )
+    return(g)
+}
+
+# worst fitting year of each province
+g = plotGof(worst = T)
+ggsave( g
+    ,filename = paste0(plotdir,"/gof_bestModel_worst.pdf")
+    ,width = 12
+    ,height = 16
+)
+# best fitting year of each province
+g = plotGof(worst = F)
+ggsave( g
+    ,filename = paste0(plotdir,"/gof_bestModel_best.pdf")
+    ,width = 12
+    ,height = 16
+)
+
+g = ggarrange(
+    # error by age
+    Error %>%
+        do.call(what = rbind) %>%
+        mutate(
+            error = predicted - observed
+            , ageGroup = factor(ageGroup, labels = config$ageGroupLabels)
+        ) %>%
+        ggplot(aes(x = ageGroup, y = error/observed, group = ageGroup))+
+        geom_violin(fill = 'black')+
+        ylab('Error : Observed')+
+        xlab('Age Group')+
+        theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+    # Error by year
+    , Error %>%
+        do.call(what = rbind) %>%
+        mutate(
+            error = predicted - observed
+        ) %>%
+        ggplot(aes(x = year, y = error/observed, group = year))+
+        geom_violin(fill = 'black')+
+        ylab('Error : Observed')+
+        xlab('Year')+
+        theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+    , nrow = 2
+    , ncol = 1
+    , labels = 'auto'
+)
+ggsave( g
+    ,filename = paste0(plotdir,"/gof_bias.pdf")
+    ,width = 6
+    ,height = 8
+)
+
+
+
+
+
+
 # describe the reconstructed susceptibility states
     # : countrywide
     recon %>%
@@ -1540,153 +1765,6 @@ lapply(recon.I, function(x){
 }) %>%
 do.call(what = rbind) %>%
 summary
-
-
-# assess the trends in beta
-
-    # countrywide
-    # : up to 1990
-    fit = glm( Beta ~ Year
-        , data = recon %>% 
-            do.call(what = rbind) %>% 
-            filter(Year <= 1990)
-    ) %>% summary
-    round(coef(fit)[2,1] + c(-2,0,2) * coef(fit)[2,2], 2)
-
-    # : post-1990
-    fit = glm( Beta ~ Year
-        , data = recon %>% 
-            do.call(what = rbind) %>% 
-            filter(Year > 1990)
-    ) %>% summary
-    round(coef(fit)[2,1] + c(-2,0,2) * coef(fit)[2,2], 2)
-
-    # by province
-    # : up to 1990
-    lapply(recon, function(x){
-        fit = glm( Beta ~ Year
-            , data = x %>% 
-                filter(Year <= 1990)
-        ) %>% summary
-        out = round(coef(fit)[2,1] + c(-2,0,2) * coef(fit)[2,2], 2)
-        c( out
-            , include.zero = between(0, out[1], out[2])
-            , below.zero = out[2] < 0
-            , above.zero = out[1] > 0
-        )
-    }) %>%
-    do.call(what = rbind) %>%
-    summary
-
-    # : post-1990
-    lapply(recon, function(x){
-        fit = glm( Beta ~ Year
-            , data = x %>% 
-                filter(Year > 1990)
-        ) %>% summary
-        out = round(coef(fit)[2,1] + c(-2,0,2) * coef(fit)[2,2], 2)
-        c( out
-            , include.zero = between(0, out[1], out[2])
-            , below.zero = out[2] < 0
-            , above.zero = out[1] > 0
-        )
-    }) %>%
-    do.call(what = rbind) %>%
-    summary
-
-
-
-# Delineate the contributions of Beta and I, on lambda
-dFold = lapply(recon, function(x){
-        fit = glm( Beta ~ Year
-            , data = x
-        ) %>%
-        predict(newdata = data.frame(Year = c(1981,2017)))
-        fold.change.Beta = (fit[2]-fit[1]) / fit[1]
-        fold.Beta = fit[2]/fit[1]
-
-        fit = glm( lambda ~ Year
-            , data = x
-        ) %>%
-        predict(newdata = data.frame(Year = c(1981,2017)))
-        fold.change.lambda = (fit[2]-fit[1]) / fit[1]
-        fold.lambda = fit[2]/fit[1]
-
-        data.frame(province = x$province[1]
-            , fold.change.lambda
-            , fold.change.Beta
-            , fold.lambda
-            , fold.Beta
-        )
-    }) %>%
-    do.call(what = rbind) %>%
-    mutate(prop.Beta = fold.change.Beta / fold.change.lambda) 
-dFold %>%
-    select(-province) %>%
-    lapply(quantile, probs = c(0.025, 0.5, 0.975))
-
-# number of provinces with beta in the same direction as lambda
-with(dFold, sign(fold.change.lambda) == sign(fold.change.Beta)) %>% sum
-
-
-# Figure S9: plot in space
-sp$map = sp$provincePolygons %>%
-    left_join(sp$provinceCentroids, by = 'id') %>%
-    rename(province = province72)
-
-plotMap = function(xvar, fill.label){
-    sp$map %>%
-        left_join(dFold
-            , by = "province"
-        ) %>%
-        ggplot(aes(long, lat, group = group))+
-        geom_polygon(aes_string(fill = xvar), color = "white", size = 0.3)+
-        scale_fill_gradient2(fill.label
-            , low = "blue"
-            , high = "red"
-            , mid = "#dddddd"
-            , midpoint = 0
-        )+
-        coord_quickmap()+
-        theme_void()
-}
-
-gMap = ggarrange(plotlist = 
-    mapply( plotMap
-        , xvar = c(
-            'fold.change.lambda'
-            , 'fold.change.Beta'
-        )
-        , fill.label = c(
-            'Proportional change in\nforce of infection (FoI)'
-            , 'Proportional change in\ntransmission efficiency'
-        )
-        , SIMPLIFY = FALSE
-    )
-    , nrow = 2
-    , ncol = 1
-    , labels = c('a','b')
-)
-g = ggarrange( gMap
-    , dFold %>%
-        ggplot(aes(x = fold.change.Beta, y = fold.change.lambda))+
-        geom_vline(xintercept = 0, linetype = 2, size = 0.1)+
-        geom_hline(yintercept = 0, linetype = 2, size = 0.1)+
-        geom_abline(slope = 1, linetype = 2, size = 0.2, color = 'red')+
-        geom_point(shape = 1, size = 1.5)+
-        theme_classic()+
-        ylab('Proportional change in FoI')+
-        xlab('Proportional change in\ntransmission efficiency')+
-        coord_fixed(ratio = 1)
-    , ncol = 2
-    , nrow = 1
-    , labels = c('','c')
-)
-ggsave(g
-    , file = file.path(outdir,'foldChange.pdf')
-    , width = 6
-    , height = 6
-)
 
 
 # plot: Beta
@@ -1842,68 +1920,35 @@ ggsave(g
 
 
 
-        #   sliding window averages of marginal FoI
-        #   (Figure S7)
-        #   .......................................
-
-g = lapply(seq(1,7, by = 2), function(window_size){
-    xx = lapply(recon, function(x, wsize = window_size){
-            oh = (wsize-1)/2 # overhang
-            iYears = (1+oh):(nrow(x)-oh)
-            data.frame(
-                province = x$province[1]
-                , Year = x$Year[iYears]
-                , avg = sapply(iYears, function(iYear){
-                    x$lambda[iYear + (-oh:oh)] %>% mean
-                })
-            )
-        }) %>%
-        do.call(what = rbind) %>%
-        mutate(avg = avg * 26) # convert to per year
-
-    rate = lm( avg ~ Year, data = xx %>% filter(Year <= 2005))$coefficients[2] %>%
-        round(4) %>%
-        {function(x){ -x }}() %>%
-        format(digits = 4, scientific = F)
-    xx %>%
-        ggplot(aes(x = Year, y = avg))+
-        geom_line(aes(group = province), alpha = 0.3)+
-        geom_smooth(method="gam")+
-        annotate("text"
-            , x = 2017
-            , y = 0.28
-            , hjust = 1
-            , vjust = 1
-            , label = paste("Rate of decline up till 2005:", rate, "per year")
-        )+
-        scale_y_continuous("Smoothed annual FoI")+
-        coord_cartesian(ylim = c(0,0.3))+
-        scale_x_continuous(limits = c(1981,2017))+
-        ggtitle(paste("Sliding window size:", window_size, "year"))
-})
-g = ggarrange( plotlist = g
+g = ggarrange(
+    ggarrange(
+        gS
+        ,ggarrange(
+            gIprop
+            ,gI + ylab("Infected : Population")
+            ,ncol = 2
+            ,nrow = 1
+            ,widths = c(4,1.2)
+        )
+        ,nrow = 2
+        ,ncol = 1
+        ,labels = c('a','b')
+    )
+    , ggarrange(gLambda, gBeta
+        , nrow = 2
+        , ncol = 1
+        , align = 'v'
+        , labels = c('c','d')
+    )
     , ncol = 2
-    , nrow = 2
-    , align = "hv"
+    , nrow = 1
+    , widths = c(5,1.1)
 )
 ggsave(g
-    ,filename = paste0(plotdir,"/lambdaDeclineRate.pdf")
-    ,width = 8
-    ,height = 6
+    ,filename = paste0(plotdir,"/states.pdf")
+    ,width = 11
+    ,height = 4
 )
-
-
-# 95%IQR for the decline in FoI up to 2005
-sapply(recon, function(xx){
-    glm( lambda ~ Year, data = xx %>% 
-        filter(Year <= 2005) %>%
-        mutate(lambda = lambda * 26)
-    )$coefficients[2]
-}) %>%
-{function(x){ -x }}() %>%
-quantile(probs = c(0.025, 0.5, 0.975)) %>%
-round(3) %>%
-format(digits = 4, scientific = F)
 
 
 
@@ -2250,9 +2295,268 @@ fun$getIncreasePerYear(meanAge.driver)
 
 
 
+
+
+
+        #   sliding window averages of marginal FoI
+        #   (Figure S7)
+        #   .......................................
+
+g = lapply(seq(1,7, by = 2), function(window_size){
+    xx = lapply(recon, function(x, wsize = window_size){
+            oh = (wsize-1)/2 # overhang
+            iYears = (1+oh):(nrow(x)-oh)
+            data.frame(
+                province = x$province[1]
+                , Year = x$Year[iYears]
+                , avg = sapply(iYears, function(iYear){
+                    x$lambda[iYear + (-oh:oh)] %>% mean
+                })
+            )
+        }) %>%
+        do.call(what = rbind) %>%
+        mutate(avg = avg * 26) # convert to per year
+
+    rate = lm( avg ~ Year, data = xx %>% filter(Year <= 2005))$coefficients[2] %>%
+        round(4) %>%
+        {function(x){ -x }}() %>%
+        format(digits = 4, scientific = F)
+    xx %>%
+        ggplot(aes(x = Year, y = avg))+
+        geom_line(aes(group = province), alpha = 0.3)+
+        geom_smooth(method="gam")+
+        annotate("text"
+            , x = 2017
+            , y = 0.28
+            , hjust = 1
+            , vjust = 1
+            , label = paste("Rate of decline up till 2005:", rate, "per year")
+        )+
+        scale_y_continuous("Smoothed annual FoI")+
+        coord_cartesian(ylim = c(0,0.3))+
+        scale_x_continuous(limits = c(1981,2017))+
+        ggtitle(paste("Sliding window size:", window_size, "year"))
+})
+g = ggarrange( plotlist = g
+    , ncol = 2
+    , nrow = 2
+    , align = "hv"
+)
+ggsave(g
+    ,filename = paste0(plotdir,"/lambdaDeclineRate.pdf")
+    ,width = 8
+    ,height = 6
+)
+
+
+# 95%IQR for the decline in FoI up to 2005
+sapply(recon, function(xx){
+    glm( lambda ~ Year, data = xx %>% 
+        filter(Year <= 2005) %>%
+        mutate(lambda = lambda * 26)
+    )$coefficients[2]
+}) %>%
+{function(x){ -x }}() %>%
+quantile(probs = c(0.025, 0.5, 0.975)) %>%
+round(3) %>%
+format(digits = 4, scientific = F)
+
+
+
+
     #   Mechanistic explanation of FoI decline
     #   ......................................
     setPlotdir('reconstruction')
+
+# assess the trends in beta
+
+    # countrywide
+    # : up to 1990
+    fit = glm( Beta ~ Year
+        , data = recon %>% 
+            do.call(what = rbind) %>% 
+            filter(Year <= 1990)
+    ) %>% summary
+    round(coef(fit)[2,1] + c(-2,0,2) * coef(fit)[2,2], 2)
+
+    # : post-1990
+    fit = glm( Beta ~ Year
+        , data = recon %>% 
+            do.call(what = rbind) %>% 
+            filter(Year > 1990)
+    ) %>% summary
+    round(coef(fit)[2,1] + c(-2,0,2) * coef(fit)[2,2], 2)
+
+    # by province
+    # : up to 1990
+    lapply(recon, function(x){
+        fit = glm( Beta ~ Year
+            , data = x %>% 
+                filter(Year <= 1990)
+        ) %>% summary
+        out = round(coef(fit)[2,1] + c(-2,0,2) * coef(fit)[2,2], 2)
+        c( out
+            , include.zero = between(0, out[1], out[2])
+            , below.zero = out[2] < 0
+            , above.zero = out[1] > 0
+        )
+    }) %>%
+    do.call(what = rbind) %>%
+    summary
+
+    # : post-1990
+    lapply(recon, function(x){
+        fit = glm( Beta ~ Year
+            , data = x %>% 
+                filter(Year > 1990)
+        ) %>% summary
+        out = round(coef(fit)[2,1] + c(-2,0,2) * coef(fit)[2,2], 2)
+        c( out
+            , include.zero = between(0, out[1], out[2])
+            , below.zero = out[2] < 0
+            , above.zero = out[1] > 0
+        )
+    }) %>%
+    do.call(what = rbind) %>%
+    summary
+
+
+
+# Delineate the contributions of Beta and I, on lambda
+lambdaContributions = function(yearRange){
+    lapply(recon, function(x){
+            fit = glm( Beta ~ Year
+                , data = x %>% filter(between(Year, yearRange[1], yearRange[2]))
+            ) %>%
+            predict(newdata = data.frame(Year = yearRange))
+            fold.change.Beta = (fit[2]-fit[1]) / fit[1]
+            fold.Beta = fit[2]/fit[1]
+
+            fit = glm( lambda ~ Year
+                , data = x %>% filter(between(Year, yearRange[1], yearRange[2]))
+            ) %>%
+            predict(newdata = data.frame(Year = yearRange))
+            fold.change.lambda = (fit[2]-fit[1]) / fit[1]
+            fold.lambda = fit[2]/fit[1]
+
+            data.frame(province = x$province[1]
+                , fold.change.lambda
+                , fold.change.Beta
+                , fold.lambda
+                , fold.Beta
+            )
+        }) %>%
+        do.call(what = rbind) %>%
+        mutate(prop.Beta = fold.change.Beta / fold.change.lambda) 
+}
+
+dFold = lambdaContributions(c(1981,2017))
+
+dFold %>%
+    select(-province) %>%
+    lapply(quantile, probs = c(0.025, 0.5, 0.975))
+
+# number of provinces with beta in the same direction as lambda
+with(dFold, sign(fold.change.lambda) == sign(fold.change.Beta)) %>% sum
+
+
+# Figure S9: plot in space
+sp$map = sp$provincePolygons %>%
+    left_join(sp$provinceCentroids, by = 'id') %>%
+    rename(province = province72)
+
+plotMap = function(xvar, fill.label, dFold){
+    sp$map %>%
+        left_join(dFold
+            , by = "province"
+        ) %>%
+        mutate_at(xvar, function(x) x*100) %>%
+        ggplot(aes(long, lat, group = group))+
+        geom_polygon(aes_string(fill = xvar), color = "white", size = 0.3)+
+        # scale_fill_gradient2(fill.label
+        #     , low = "blue"
+        #     , high = "red"
+        #     , mid = "#dddddd"
+        #     , midpoint = 0
+        # )+
+        scale_fill_gradientn(fill.label
+            , colors = c("blue", "#dddddd", "red")
+            , limits = c(-100, 100)
+        )+
+
+        coord_quickmap()+
+        theme_void()+
+        theme(
+            legend.position = 'bottom'
+            , legend.title = element_text(hjust = 1, vjust = 0.5, margin = margin(r = 10))
+        )+
+        facet_grid(. ~ Years)
+}
+
+dFold = lapply(list(
+        c(1981, 2017)
+        , c(1981, 1990)
+        , c(1991, 2017)
+    ), function(yearRange){
+        lambdaContributions(yearRange) %>%
+        mutate(Years = paste(yearRange, collapse="-"))
+    }) %>%
+    do.call(what = rbind) %>%
+    mutate(Years = factor(Years, levels = unique(Years)))
+
+gMap = ggarrange(plotlist = 
+    mapply( plotMap
+        , xvar = c(
+            'fold.change.lambda'
+            , 'fold.change.Beta'
+        )
+        , fill.label = c(
+            'Percentage change in\nforce of infection (FoI)'
+            , 'Percentage change in\ntransmission efficiency'
+        )
+        , dFold = list(dFold)
+        , SIMPLIFY = FALSE
+    )
+    , nrow = 2
+    , ncol = 1
+)
+
+g = ggarrange(
+    dFold %>%
+        ggplot(aes(x = fold.change.Beta * 100, y = fold.change.lambda * 100))+
+        geom_vline(xintercept = 0, linetype = 2, size = 0.1)+
+        geom_hline(yintercept = 0, linetype = 2, size = 0.1)+
+        geom_abline(slope = 1, linetype = 2, size = 0.2, color = 'red')+
+        geom_point(shape = 1, size = 1.5)+
+        theme_classic()+
+        ylab('Percentage change in FoI')+
+        xlab('Percentage change in\ntransmission efficiency')+
+        coord_fixed(ratio = 1)+
+        facet_grid(. ~ Years)
+    , gMap
+    , ncol = 1
+    , nrow = 2
+    , heights = c(1,2)
+    , labels = 'auto'
+)
+ggsave(g
+    , file = file.path(outdir,'foldChange.pdf')
+    , width = 7
+    , height = 12.5
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     # Beta
 
@@ -2295,4 +2599,5 @@ I.changerate = sapply(fitsums, function(x){
     x$coefficients[2,1]
 }) 
 I.changerate %>% quantile(c(0.025, 0.5, 0.975))
+
 
