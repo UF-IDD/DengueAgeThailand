@@ -14,6 +14,7 @@ parser$add_argument('-model.include', nargs = "*", default = "m3h.rtaQeT")
 
 # parse arguments
 inputArg = parser$parse_args()
+# inputArg = parser$parse_args('DHF_add')
 
 
 # function to set plot directory
@@ -51,6 +52,80 @@ x = x %>% filter(model %in% inputArg$model.include)
 
 
 
+
+    #   Plot density of Phi(a), Phi(t), one panel per age/time
+    #   ...............................
+
+ageBinLabels = function(x = seq(0, 60, by = 4)){
+    paste0(x, c(paste0('-',x[-1]-1), "+"))
+}
+timeBinLabels = function(x = seq(1981, 2011, by = 2)){
+    paste0(x, c(paste0('-',x[-1]-1), "+"))
+}
+
+
+plotDensityPanel = function(varname, xval, yval.func, yLimit, Title, panel.labels){
+    # posterior
+    # : process one province at a time
+    xx = lapply(x$rds, function(rds){
+        readRDS(rds) %>%
+            as.matrix(pars = varname) %>%
+            apply(2, density)
+    })
+    par(oma = c(1,1,1.5,0), mar = c(2,2,3,1), mfrow = c(4,4))
+    lapply(seq_along(xx[[1]]), function(i){
+        plot(x=range(xval), y = c(0,yLimit), type = 'n'
+            , xlab = NA
+            , ylab = NA
+            , main = panel.labels[i]
+        )
+        lapply(xx, function(xxprov){
+            with(xxprov[[i]], lines(x,y, lwd = 0.5, col = "#00000020"))
+        })
+        # prior
+        # lines(xval, yval.func(xval), col = 'blue')
+    }) %>%
+    invisible
+    mtext(Title, side = 3, line = 0, outer = TRUE)
+    mtext("Density", side = 2, line = 0, outer = TRUE, cex = 0.9)
+    mtext("Value", side = 1, line = 0, outer = TRUE, cex = 0.9)
+}
+
+
+pdf(file = file.path(plotdir, "PhiT.pdf")
+    , width = 6
+    , height = 6
+)
+    plotDensityPanel("binnedPhiT"
+        , xval = seq(0, 1, by = 0.01)
+        , yval.func = function(x){ dnorm(x, 0.5, 1) }
+        , yLimit = 8
+        , Title = "Time-varying reporting rate"
+        , panel.labels = timeBinLabels()
+    )
+dev.off()
+
+
+pdf(file = file.path(plotdir, "PhiA.pdf")
+    , width = 6
+    , height = 6
+)
+    plotDensityPanel("binnedPhiA"
+        , xval = seq(0, 1, by = 0.01)
+        , yval.func = function(x){ dnorm(x, 0.5, 1) }
+        , yLimit = 10
+        , Title = "Age-specific reporting rate"
+        , panel.labels = paste('Age', ageBinLabels())
+    )
+dev.off()
+
+
+q(save = 'n')
+
+
+
+    #   One parameter per panel
+    #   .......................
 
 plotDensity = function(varname, xval, yval.func, yLimit, Title){
     plot(x=range(xval), y = c(0,yLimit), type = 'n'
@@ -157,3 +232,5 @@ par(mfrow = c(1,4))
         , yLimit = 35
     )
 dev.off()
+
+

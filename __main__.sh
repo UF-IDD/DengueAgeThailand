@@ -44,7 +44,7 @@ checkFit(){
 checkFit
 
 # Plot priors vs posteriors for the best fit model
-Rscript --vanilla Scripts/05-PriorVsPosterior.R
+Rscript --vanilla Scripts/05-PriorVsPosterior.R DHF_add
 
 # Assess sensitivity of parameter estimates
 

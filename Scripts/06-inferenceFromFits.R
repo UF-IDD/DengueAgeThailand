@@ -103,6 +103,26 @@ fun$getModelComponent = function(model.name){
     )
 }
 
+fun$formatProvinceNames = function(x, line.length = 10){
+    # add space between capital letters
+    x = gsub('([A-Z])', ' \\1', x)
+    x = gsub('^ +', '', x)
+    
+    if(nchar(x) < line.length){ return(x) }
+    iCaps = str_locate_all(x, "[A-Z]")[[1]][-1, 'start']
+    if(length(iCaps)==0){ return(x) }
+    if(length(iCaps)>1){
+        iCaps = iCaps[which.min(nchar(x) - iCaps)][1]
+    }
+    paste0(
+        substring(x, 1, iCaps-1-1), '\n'
+        , substring(x, iCaps)
+    )
+}
+
+fun$formatProvinceNames('NakornRatchasima')
+fun$formatProvinceNames('PhraNakornSriAyutthaya')
+fun$formatProvinceNames('Ydfdskfdslfdl')
 
 
     #   plot performance comparisons
@@ -461,10 +481,14 @@ g = x %>%
         , var == '-ELPD'
     ) %>%
     mutate(model = factor(model, levels = bestModels)) %>%
+    mutate(province = factor(province
+        , levels = levels(province)
+        , labels = sapply(levels(province), fun$formatProvinceNames)
+    )) %>%
     ggplot(aes(x = model, y = val, color = model == modelSelected))+
     geom_point()+
     geom_linerange(aes(ymin = lower, ymax = upper))+
-    facet_wrap( ~ province, ncol = 8 )+
+    facet_wrap( ~ province, ncol = 8)+
     scale_color_manual(values = c('TRUE' = 'blue', 'FALSE' = 'black'), guide = "none")+
     scale_x_discrete("Candidate model"
         , labels = modelLetter
@@ -472,7 +496,7 @@ g = x %>%
     ylab("Difference in -ELPD from\ncountry-level best model")+
     theme(
         panel.grid = element_blank()
-        , strip.text = element_text(size = rel(0.5))
+        , strip.text = element_text(size = rel(0.7))
     )
 ggsave( g
     ,filename = paste0(plotdir,"/performance_bestModels.pdf")
@@ -995,24 +1019,37 @@ dCase = dat$case %>%
     do.call(what = rbind) %>%
     as.data.frame %>%
     mutate(province = names(dat$case)) %>%
-    gather(Year, count, -province) %>%
+    gather(Year, case, -province) %>%
     mutate(Year = gsub("[^0-9]","",Year) %>% as.integer) %>%
+    left_join(dat$pop %>%
+        lapply(function(x){
+            colSums(x * (x!=-1))
+        }) %>%
+        do.call(what = rbind) %>%
+        as.data.frame %>%
+        mutate(province = names(dat$pop)) %>%
+        gather(Year, pop, -province) %>%
+        mutate(Year = gsub("[^0-9]","",Year) %>% as.integer)
+        , by = c('province','Year')
+    ) %>%
     mutate(province = factor(province, levels = names(dat$case)))
 gCase = dCase %>%
-    ggplot(aes(x = Year, y = count * 10 / 1000))+
-    #geom_line(aes(group=province), color = '#bbbbbb', alpha = 0.4, size = 0.4)+
-    geom_line(data = dCase %>% 
-            group_by(Year) %>%
-            summarize(count = sum(count))
-        , aes(y = count / 1000)
-        , size = 0.8
+    group_by(Year) %>%
+    summarize(
+        case = sum(case)
+        , pop = sum(pop)
+    ) %>%
+    mutate(inc1000 = case * 1000 / pop ) %>%
+    ggplot(aes(x = Year, y = inc1000))+
+    geom_line(
+        # , aes(y = count / 1000)
+        size = 0.8
     )+
     scale_x_continuous(limits = c(1980,2017) + c(-.5,.5))+
-    scale_y_continuous("1000 DHF cases\nreported")+
+    scale_y_continuous("DHF cases per\n1000 population")+
     theme(
         panel.grid = element_blank()
-        , axis.text.x = element_blank()
-        , axis.title.x = element_blank()
+        # , axis.title.x = element_blank()
     )
 
 
@@ -1049,17 +1086,16 @@ gQe = qeDat %>%
 
 # time varying parameters
 gTime = ggarrange(
-    gCase
     # tau(t)
-    , fun$plotParamSeries( 
+    fun$plotParamSeries( 
         elpd$expandedLambda
         # , expression(bar(tau)(t))
         , "Time-varying per-serotype\ninfection intensity"
         , Color.qit = paramCols[['Lambda']]
         , Color.qi = character(0)
     )+
-    scale_x_continuous("Year", limits = c(1980,2017) + c(-.5,.5))+
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+    scale_x_continuous("Year", limits = c(1980,2017) + c(-.5,.5))#+
+    # theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 
     # PhiT
     ,fun$plotParamSeries(
@@ -1069,14 +1105,16 @@ gTime = ggarrange(
         , Color.qit = paramCols[['PhiT']]
         , Color.qi = character(0)
     )+
-    scale_x_continuous("Year", limits = c(1980,2017) + c(-.5,.5))+
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+    scale_x_continuous("Year", limits = c(1980,2017) + c(-.5,.5))#+
+    # theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 
+    , gCase
+    
     ,ncol = 1
     ,nrow = 3
-    ,heights = c(1.2, 2, 2)
+    ,heights = c(2, 2, 1.2)
     ,align = "v"
-    ,labels = 'auto'
+    ,labels = c('a','c','e')
 )
 
 
@@ -1093,9 +1131,8 @@ ageBinLabel = data.frame(ageBin = fun$expandBinned(binMax = 16, binwidth = 4, iM
     })) %>%
     with(ageBinLabel)
 gAge = ggarrange(
-    gQe
     # K
-    ,fun$plotParamSeries(
+    fun$plotParamSeries(
         lapply(elpd$est, function(est){
             fun$extractParam(est, "binnedK") %>%
             mutate(xvar = factor(ageBinLabel[ivar], levels = ageBinLabel)) %>%
@@ -1129,11 +1166,12 @@ gAge = ggarrange(
     xlab('Age')+
     theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 
+    , gQe
     ,ncol = 1
     ,nrow = 3
-    ,heights = c(1.2,2,2)
+    ,heights = c(2,2, 1.2)
     ,align = "v"
-    ,labels = letters[4:6]
+    ,labels = c('b','d','f')
 )
 
 g = ggarrange(
@@ -1610,6 +1648,10 @@ plotGof = function(worst = T, dat = Error){
         , levels = seq_along(config$ageGroupLabels)
         , labels = config$ageGroupLabels
     )) %>%
+    mutate(province = factor(province
+        , levels = levels(province)
+        , labels = sapply(levels(province), fun$formatProvinceNames)
+    )) %>%
     ggplot(aes(x = `Age Group`))+
     geom_col(aes(y = observed), fill = '#cccccc')+
     geom_point(aes(y = predicted), size = 0.5, shape = 1)+
@@ -1617,8 +1659,8 @@ plotGof = function(worst = T, dat = Error){
     ylab('Number of DHF cases')+
     theme_classic()+
     theme(
-        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = rel(0.7))
-        , strip.text = element_text(size = rel(0.7))
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = rel(0.75))
+        , strip.text = element_text(size = rel(0.8))
     )
     return(g)
 }
